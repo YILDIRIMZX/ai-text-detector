@@ -25,7 +25,7 @@ PATTERNS = {
         # human Turkish uses them constantly, so they caused false positives in testing.
         "kalip_baglac": [
             r"bunun yanı sıra", r"buna ek olarak", r"bu bağlamda", r"bu doğrultuda",
-            r"sonuç olarak", r"özetle", r"genel olarak değerlendir",
+            r"sonuç olarak", r"\bözetle\b", r"genel olarak değerlendir",
         ],
         "abarti_sifat": [
             r"kapsamlı", r"verimli ve etkili", r"etkili ve verimli", r"yenilikçi", r"dinamik",
