@@ -1,0 +1,5 @@
+Dün akşam laboratuvarda yine SUMO ile uğraştım. Kavşak OSM'den bozuk geldi, şeritlerin yarısı ters yönde. Üç saat netedit'te tıklayıp durdum, sonunda bıraktım.
+
+Hocaya sordum, "basit bir kavşak seç" dedi. Haklı aslında. Ben de Gazi Muhtar Paşa'daki dört kollu olanı aldım, orası zaten her sabah tıkanıyor, otobüsten görüyorum. Fazları elle yazmak daha hızlı oldu bence.
+
+Asıl sorun eğitim. DQN 40 bin adımda hiçbir şey öğrenmedi, ödül sıfır civarında takıldı. Belki öğrenme oranı yüksek, belki ödül tanımım saçma, bilmiyorum. Yarın PPO'yu deneyeceğim, o da olmazsa sumo-rl örneğine geri dönerim.
