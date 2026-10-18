@@ -28,7 +28,7 @@ The skill combines four independent signals, because none of them is reliable on
 | # | Signal | What it measures | Runs |
 |---|---|---|---|
 | 1 | **Stylometric statistics** (`ai_stats.py`) | Sentence-length variation ("burstiness"), vocabulary diversity (MATTR), rates of AI-typical phrases in Turkish and English (stock openers, overused connectors, inflated adjectives, hedges), list/heading/triad structure, repetition | Local, Python standard library only |
-| 2 | **Local model score** (`binoculars.py`) | A zero-shot [Binoculars](https://arxiv.org/abs/2401.12070)-style score from two small open models (Qwen2.5-0.5B base + instruct). Machine-generated text is unusually predictable to language models. The score is compared with an **AI-written anchor text** on the same topic and, optionally, with **your own human writing** (one-time calibration) | Local, CPU or GPU; no text leaves your machine |
+| 2 | **Local model score** (`binoculars.py`) | Two published zero-shot methods, re-implemented on two small open models (Qwen2.5-0.5B base + instruct): [Binoculars](https://arxiv.org/abs/2401.12070) as the main score and [Fast-DetectGPT](https://arxiv.org/abs/2310.05130) as a second opinion. Machine-generated text is unusually predictable to language models. The score is compared with an **AI-written anchor text** on the same topic and, optionally, with **your own human writing** (one-time calibration) | Local, CPU or GPU; no text leaves your machine |
 | 3 | **Definitive signals** | Chatbot leftovers ("As an AI language model…", "I hope this helps"), unfilled placeholders, and, for academic texts, **citations that don't exist** (checked by web search) | Agent |
 | 4 | **Blind judge panel** | Three independent judges (stylometrist, content analyst, devil's advocate who argues for human authorship) read the text separately. Their judgments are then **anonymously cross-reviewed and ranked**, so weak judgments count less | Agent sub-agents |
 
@@ -57,17 +57,37 @@ Ask your agent in plain language, e.g.:
 - "Bu metin yapay zekâ ile mi yazılmış?" + pasted text
 - "Check my report before I submit it, does it read like AI?"
 
-### Real results on the example texts
+### Pilot evaluation (Turkish, 11 texts)
 
-Signals 1–3 measured on the two Turkish samples in `examples/` (CPU, uncalibrated, AI anchor written on the same topic). Both texts are short (~100 words), so a full report would mark confidence as low.
+A small test on Turkish texts with known authors: 3 human texts (a 2019 Wikipedia article, a 2017 Wikipedia talk page, a student's unpunctuated notes), AI texts in default assistant style, and harder cases. Full pipeline (statistics + local models + 3 judges), uncalibrated, CPU.
 
-| | `ai_style_tr.txt` | `human_style_tr.txt` |
+| Text | Truth | Result | |
+|---|---|---|---|
+| AI essay (city profile) | AI | 89% | ✓ |
+| AI essay (language debate) | AI | 83% | ✓ |
+| AI weekly project report, technical | AI | 68% | ✓ local models missed it; judges and statistics caught it |
+| AI text with a chatbot leftover ("I hope this helps") | AI | ≥ 95% (definitive signal) | ✓ |
+| Wikipedia article (2019) | human | 16% | ✓ |
+| Wikipedia talk page (2017) | human | 7% | ✓ |
+| Student's raw notes, no punctuation | human | ~10% | ✓ |
+| Project draft: AI draft + student edits | mixed | 41%, low confidence | ~ undecided |
+| Student's notes, lightly edited by AI, facts kept | mixed | 33%; judges flagged "human content, AI polish" | ~ |
+| **AI text paraphrased into a casual style** | **AI** | **24%** | **✗ missed** |
+
+Model signals on the same texts (lower Binoculars r / higher Fast-DetectGPT = more AI-like):
+
+| | Binoculars r vs. AI anchor | Fast-DetectGPT |
 |---|---|---|
-| Sentence-length variation (burstiness CV) | 0.23 (very uniform) | 0.46 (mixed) |
-| AI-typical phrases per 1000 words | 174.7 | 0 |
-| Binoculars vs. AI anchor (r, lower = more machine-like) | 0.93 → model score ≈ 90 | 1.18 → model score ≈ 36 |
-| Definitive signal | "Umarım bu bilgiler yardımcı olur" (chatbot leftover) | none |
-| Outcome | ≥ 95% AI (definitive signal) | low AI probability; the judge panel decides the final number |
+| AI, default style (3 texts) | 0.93 – 0.98 | 3.35 – 4.54 |
+| AI, technical report | 1.07 | 1.69 |
+| AI, paraphrased / imitating a human | 1.18 – 1.20 | −0.69 – −0.55 |
+| Human (3 texts) | 1.07 – 1.13 | 0.34 – 2.86 |
+
+What this shows:
+- Default-style AI text and unedited human text are separated well.
+- **Paraphrased AI text gets through.** Simple rewording into short, casual sentences fooled the statistics, both model scores and most judges. This matches the literature (Krishna et al., 2023).
+- Encyclopedic human writing looks machine-like to the model scores (Fast-DetectGPT flagged the Wikipedia article); the judges and statistics corrected it.
+- 11 texts is a sanity check, not a benchmark. Thresholds were set on this pilot and may not transfer.
 
 Report format (shortened):
 
@@ -93,7 +113,7 @@ Why this result may be wrong: …
 
 - **It cannot prove authorship.** No detector can. Published studies show AI detectors misclassify human writing, especially by **non-native speakers** (one widely cited study found an average false-positive rate of 61% on non-native English essays), and that current tools are not reliable for high-stakes decisions such as grading or misconduct cases.
 - **Short texts** (< 150 words) give low-confidence results; under ~50 words it refuses to give a percentage.
-- **Edited or paraphrased AI text** (rewritten by a person or a "humanizer") is much harder to detect, and false negatives are likely.
+- **Paraphrased or "humanized" AI text is largely missed.** In the pilot, a simple casual rewrite dropped an AI text from 68% to 24%. This is a known weakness of all current detectors (Krishna et al., 2023). A low score never proves a human wrote the text.
 - **Formulaic genres** (CVs, legal text, forms, technical docs, school essays written to a template) look machine-like even when human-written.
 - **Grammar tools and translation** shift scores toward "AI".
 - The **local model score is uncalibrated** for this small model pair until you calibrate it; on its own it is a weak signal. Small models are less accurate than the large models used in the original Binoculars paper, and Turkish performance is less studied than English.
@@ -118,18 +138,24 @@ skills/ai-detector/
   scripts/binoculars.py  # local two-model score
   scripts/setup.ps1      # environment setup (Windows)
   scripts/setup.sh       # environment setup (Linux/macOS)
-examples/                # sample AI-style and human-style Turkish texts
+examples/                # two short Turkish test texts, BOTH machine-written:
+                         #   ai_style_tr.txt    default assistant style
+                         #   human_style_tr.txt AI imitating casual human notes (a hard case)
 ```
 
 ### References
 
 - Hans et al., 2024. *Spotting LLMs With Binoculars: Zero-Shot Detection of Machine-Generated Text.* [arXiv:2401.12070](https://arxiv.org/abs/2401.12070)
+- Bao et al., 2024. *Fast-DetectGPT: Efficient Zero-Shot Detection of Machine-Generated Text via Conditional Probability Curvature.* [arXiv:2310.05130](https://arxiv.org/abs/2310.05130)
+- Krishna et al., 2023. *Paraphrasing evades detectors of AI-generated text, but retrieval is an effective defense.* [arXiv:2303.13408](https://arxiv.org/abs/2303.13408)
 - Liang et al., 2023. *GPT detectors are biased against non-native English writers.* [arXiv:2304.02819](https://arxiv.org/abs/2304.02819)
 - Survey: *Towards Possibilities & Impossibilities of AI-generated Text Detection.* [arXiv:2310.15264](https://arxiv.org/abs/2310.15264)
 
 ### License
 
 MIT (see `LICENSE`). The Qwen2.5 models are downloaded from Hugging Face under their own license (Apache 2.0).
+
+Acknowledgements: the model scores re-implement the methods of [Binoculars](https://github.com/ahans30/Binoculars) (BSD-3-Clause) and [Fast-DetectGPT](https://github.com/baoguangsheng/fast-detect-gpt) (MIT) from their papers; no code was copied. Turkish test texts from Wikipedia (CC BY-SA) were used only for evaluation and are not included in this repository.
 
 ---
 
@@ -157,7 +183,7 @@ Tek başına hiçbiri güvenilir olmadığı için dört bağımsız sinyali bir
 | # | Sinyal | Ne ölçer | Nerede çalışır |
 |---|---|---|---|
 | 1 | **Biçemsel istatistikler** (`ai_stats.py`) | Cümle uzunluğu çeşitliliği, kelime çeşitliliği (MATTR), Türkçe ve İngilizce yapay zekâ kalıplarının sıklığı ("günümüzde", "önemli bir rol oynar", "bunun yanı sıra", "kapsamlı/etkili/yenilikçi"…), liste/başlık/üçlü yapı, tekrarlar | Yerel, sadece Python standart kütüphanesi |
-| 2 | **Yerel model skoru** (`binoculars.py`) | İki küçük açık modelle (Qwen2.5-0.5B temel + instruct) [Binoculars](https://arxiv.org/abs/2401.12070) yöntemine benzer bir skor. Makine metni dil modellerine alışılmadık derecede "tahmin edilebilir" gelir. Skor, aynı konuda yazılmış bir **yapay zekâ referans metniyle** ve isteğe bağlı olarak **senin kendi yazılarınla** (tek seferlik kalibrasyon) karşılaştırılır | Yerel, CPU veya GPU; metin bilgisayardan çıkmaz |
+| 2 | **Yerel model skoru** (`binoculars.py`) | Yayımlanmış iki sıfır-örnek (zero-shot) yöntem, iki küçük açık model (Qwen2.5-0.5B temel + instruct) üzerinde yeniden uygulandı: ana skor [Binoculars](https://arxiv.org/abs/2401.12070), ikinci görüş [Fast-DetectGPT](https://arxiv.org/abs/2310.05130). Makine metni dil modellerine alışılmadık derecede "tahmin edilebilir" gelir. Skor, aynı konuda yazılmış bir **yapay zekâ referans metniyle** ve isteğe bağlı olarak **senin kendi yazılarınla** (tek seferlik kalibrasyon) karşılaştırılır | Yerel, CPU veya GPU; metin bilgisayardan çıkmaz |
 | 3 | **Kesin işaretler** | Sohbet botu artıkları ("Bir yapay zekâ modeli olarak…", "Umarım yardımcı olur"), doldurulmamış yer tutucular ve akademik metinlerde **var olmayan kaynaklar** (web aramasıyla kontrol edilir) | Ajan |
 | 4 | **Kör jüri** | Üç bağımsız hakem (biçem uzmanı, içerik analisti, metnin insan yazısı olduğunu savunan "şeytanın avukatı") metni ayrı ayrı okur. Sonra kararları **isimsiz olarak çapraz değerlendirilir ve sıralanır**; zayıf kararların ağırlığı düşer | Ajan alt-ajanları |
 
@@ -179,17 +205,28 @@ Ajana düz bir dille sor:
 - "Raporumu teslim etmeden önce kontrol et, YZ gibi duruyor mu?"
 - "Is this text AI-generated?" + yapıştırılmış metin
 
-### Örnek metinlerde gerçek sonuçlar
+### Pilot değerlendirme (Türkçe, 11 metin)
 
-`examples/` klasöründeki iki Türkçe örnekte 1–3. sinyallerin ölçümü (CPU, kalibrasyonsuz, aynı konuda yazılmış YZ referansıyla). İki metin de kısa (~100 kelime), bu yüzden tam raporda güven "düşük" olarak işaretlenir.
+Yazarı bilinen Türkçe metinlerle küçük bir test: 3 insan metni (2019 tarihli bir Vikipedi maddesi, 2017 tarihli bir Vikipedi tartışma sayfası, bir öğrencinin noktalamasız notları), varsayılan asistan üslubunda yapay zekâ metinleri ve daha zor durumlar. Tam akış (istatistik + yerel modeller + 3 hakem), kalibrasyonsuz, CPU.
 
-| | `ai_style_tr.txt` | `human_style_tr.txt` |
-|---|---|---|
-| Cümle uzunluğu çeşitliliği (burstiness CV) | 0,23 (çok tekdüze) | 0,46 (karışık) |
-| 1000 kelimede YZ kalıbı | 174,7 | 0 |
-| YZ referansına göre Binoculars (r, düşük = daha makine gibi) | 0,93 → model skoru ≈ 90 | 1,18 → model skoru ≈ 36 |
-| Kesin işaret | "Umarım bu bilgiler yardımcı olur" (sohbet botu artığı) | yok |
-| Sonuç | ≥ %95 YZ (kesin işaret) | düşük YZ olasılığı; son sayıyı jüri belirler |
+| Metin | Gerçek | Sonuç | |
+|---|---|---|---|
+| YZ denemesi (şehir tanıtımı) | YZ | %89 | ✓ |
+| YZ denemesi (dil tartışması) | YZ | %83 | ✓ |
+| YZ haftalık proje raporu, teknik | YZ | %68 | ✓ yerel modeller kaçırdı; jüri ve istatistik yakaladı |
+| Sohbet botu artığı içeren YZ metni ("Umarım yardımcı olur") | YZ | ≥ %95 (kesin işaret) | ✓ |
+| Vikipedi maddesi (2019) | insan | %16 | ✓ |
+| Vikipedi tartışma sayfası (2017) | insan | %7 | ✓ |
+| Öğrencinin noktalamasız ham notları | insan | ~%10 | ✓ |
+| Proje taslağı: YZ taslağı + öğrenci düzenlemeleri | karışık | %41, düşük güven | ~ kararsız |
+| Öğrenci notlarının YZ ile hafifçe düzenlenmiş hâli (bilgiler aynı) | karışık | %33; hakemler "içerik insanın, cila YZ'nin" dedi | ~ |
+| **Gündelik üsluba çevrilmiş YZ metni** | **YZ** | **%24** | **✗ kaçırıldı** |
+
+Bu ne gösteriyor:
+- Varsayılan üslupta YZ metni ile düzenlenmemiş insan metni iyi ayrışıyor.
+- **Yeniden ifade edilmiş YZ metni yakalanmıyor.** Kısa ve gündelik cümlelerle yapılan basit bir yeniden yazım; istatistikleri, iki model skorunu ve hakemlerin çoğunu kandırdı. Bu, literatürle tutarlı (Krishna vd., 2023).
+- Ansiklopedik insan yazısı model skorlarına makine gibi görünebiliyor (Fast-DetectGPT Vikipedi maddesini işaretledi); jüri ve istatistik bunu düzeltti.
+- 11 metin bir sağlama testidir, kıyaslama (benchmark) değil. Eşikler bu pilota göre ayarlandı; başka metinlere aynen geçmeyebilir.
 
 ### Neler yapabilir?
 
@@ -204,7 +241,7 @@ Ajana düz bir dille sor:
 
 - **Yazarı kanıtlayamaz.** Hiçbir dedektör kanıtlayamaz. Yayımlanmış çalışmalar yapay zekâ dedektörlerinin insan yazısını, özellikle **anadili farklı olan yazarların** metinlerini hatalı işaretlediğini gösteriyor (sık atıf alan bir çalışmada anadili İngilizce olmayan öğrencilerin makalelerinde ortalama yanlış alarm oranı %61). Mevcut araçlar not verme ya da disiplin gibi yüksek riskli kararlar için güvenilir değil.
 - **Kısa metinlerde** (< 150 kelime) güven düşüktür; ~50 kelimenin altında yüzde verilmez.
-- **Düzenlenmiş ya da başka sözcüklerle yeniden yazılmış** yapay zekâ metinlerini yakalamak çok daha zordur; gözden kaçırma olasılığı yüksektir.
+- **Yeniden ifade edilmiş ya da "insanlaştırılmış" YZ metni büyük ölçüde kaçırılır.** Pilotta basit bir gündelik yeniden yazım, bir YZ metnini %68'den %24'e düşürdü. Bu, mevcut tüm dedektörlerin bilinen bir zayıflığıdır (Krishna vd., 2023). Düşük bir skor, metni bir insanın yazdığını asla kanıtlamaz.
 - **Kalıplı türler** (CV, hukuki metin, form, teknik belge, şablona göre yazılmış okul ödevi) insan yazısı olsa bile makine gibi görünebilir.
 - **Dilbilgisi araçları ve çeviri** skoru "yapay zekâ" yönüne kaydırır.
 - **Yerel model skoru**, sen kalibre edene kadar bu küçük model çifti için kalibre değildir; tek başına zayıf bir sinyaldir. Küçük modeller, orijinal Binoculars çalışmasındaki büyük modellerden daha az isabetlidir; Türkçedeki başarısı İngilizceye göre daha az incelenmiştir.
@@ -223,3 +260,5 @@ Ajana düz bir dille sor:
 ### Lisans
 
 MIT (`LICENSE` dosyasına bakın). Qwen2.5 modelleri Hugging Face'ten kendi lisanslarıyla (Apache 2.0) indirilir.
+
+Teşekkür: model skorları [Binoculars](https://github.com/ahans30/Binoculars) (BSD-3-Clause) ve [Fast-DetectGPT](https://github.com/baoguangsheng/fast-detect-gpt) (MIT) yöntemlerini makalelerinden yeniden uygular; kod kopyalanmamıştır. Vikipedi'den alınan Türkçe test metinleri (CC BY-SA) sadece değerlendirme için kullanıldı ve bu repoya eklenmedi.

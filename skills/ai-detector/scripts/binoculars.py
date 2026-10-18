@@ -1,7 +1,13 @@
-"""Binoculars-style zero-shot score with two small local models (no API, nothing leaves the machine).
+"""Zero-shot machine-text scores with two small local models (no API, nothing leaves the machine).
 
-Method: Hans et al. 2024, "Spotting LLMs With Binoculars". score = log-perplexity of the text under
-the performer model / cross-perplexity between observer and performer. Lower = more machine-like.
+Two published methods, re-implemented here (no code copied; formulas follow the papers):
+- Binoculars: Hans et al. 2024, "Spotting LLMs With Binoculars", arXiv:2401.12070
+  (reference code: github.com/ahans30/Binoculars, BSD-3-Clause). score = log-perplexity under the
+  performer / cross-perplexity between observer and performer. Lower = more machine-like.
+- Fast-DetectGPT: Bao et al. 2024, "Fast-DetectGPT: Efficient Zero-Shot Detection of
+  Machine-Generated Text via Conditional Probability Curvature", arXiv:2310.05130
+  (reference code: github.com/baoguangsheng/fast-detect-gpt, MIT). Analytic sampling discrepancy.
+  Higher = more machine-like.
 Small Qwen2.5 models are used because they share a tokenizer and handle Turkish and English.
 Thresholds for this model pair are NOT calibrated, so the script also scores reference texts
 (an AI-written anchor and, if available, known-human samples) and reports the document relative to them.
@@ -41,10 +47,18 @@ def score_chunk(ids, obs, perf):
     obs_logits = obs(ids).logits[:, :-1].float()
     perf_logits = perf(ids).logits[:, :-1].float()
     target = ids[:, 1:]
+    # Binoculars (Hans et al. 2024; reference implementation: github.com/ahans30/Binoculars, BSD-3-Clause)
     log_ppl = F.cross_entropy(perf_logits.transpose(1, 2), target).item()
     obs_probs = F.softmax(obs_logits, dim=-1)
-    x_ppl = -(obs_probs * F.log_softmax(perf_logits, dim=-1)).sum(-1).mean().item()
-    return log_ppl, x_ppl, target.shape[1]
+    perf_logp = F.log_softmax(perf_logits, dim=-1)
+    x_ppl = -(obs_probs * perf_logp).sum(-1).mean().item()
+    # Fast-DetectGPT analytic sampling discrepancy (Bao et al. 2024; reference implementation:
+    # github.com/baoguangsheng/fast-detect-gpt, MIT). Observer = sampling model, performer = scoring
+    # model. Positive and large = the text sits in the high-probability region = more machine-like.
+    token_logp = perf_logp.gather(-1, target.unsqueeze(-1)).squeeze(-1)
+    mean_ref = (obs_probs * perf_logp).sum(-1)
+    var_ref = (obs_probs * perf_logp.square()).sum(-1) - mean_ref.square()
+    return log_ppl, x_ppl, target.shape[1], (token_logp - mean_ref).sum().item(), var_ref.sum().item()
 
 
 def score_text(text, tok, obs, perf, device):
@@ -52,18 +66,20 @@ def score_text(text, tok, obs, perf, device):
     ids = tok(text, return_tensors="pt").input_ids.to(device)
     if ids.shape[1] < 16:
         return None
-    total_ppl = total_x = total_n = 0.0
+    total_ppl = total_x = total_n = total_disc = total_var = 0.0
     for start in range(0, ids.shape[1], MAX_TOKENS):
         chunk = ids[:, start:start + MAX_TOKENS]
         if chunk.shape[1] < 16:
             break
-        lp, xp, n = score_chunk(chunk, obs, perf)
+        lp, xp, n, disc, var = score_chunk(chunk, obs, perf)
         total_ppl += lp * n
         total_x += xp * n
         total_n += n
+        total_disc += disc
+        total_var += var
     log_ppl, x_ppl = total_ppl / total_n, total_x / total_n
     return {"binoculars": round(log_ppl / x_ppl, 4), "log_ppl": round(log_ppl, 3),
-            "tokens": int(total_n)}
+            "fast_detectgpt": round(total_disc / total_var ** 0.5, 3), "tokens": int(total_n)}
 
 
 def read(path):
@@ -82,6 +98,25 @@ def relative_position(doc, ai_ref, human_ref):
     return round(min(1.0, max(0.0, (doc - ai_ref) / (human_ref - ai_ref))), 3)
 
 
+def sections(text, min_words=120):
+    """Paragraphs of 40+ words; if a document is made of short paragraphs (headings, tables,
+    bullet lists), consecutive paragraphs are merged into ~120-word sections instead, so the
+    report can still say WHERE the text changes character."""
+    paras = [p.strip() for p in re.split(r"\n\s*\n", text) if p.strip()]
+    long_paras = [p for p in paras if len(p.split()) >= 40]
+    if len(long_paras) >= max(2, len(paras) // 2):
+        return long_paras
+    merged, current = [], []
+    for p in paras:
+        current.append(p)
+        if sum(len(c.split()) for c in current) >= min_words:
+            merged.append("\n\n".join(current))
+            current = []
+    if current and sum(len(c.split()) for c in current) >= 40:
+        merged.append("\n\n".join(current))
+    return merged
+
+
 def main():
     sys.stdout.reconfigure(encoding="utf-8")
     ap = argparse.ArgumentParser()
@@ -95,7 +130,7 @@ def main():
     models = load()
     text = read(args.doc)
     doc = score_text(text, *models)
-    paragraphs = [p for p in re.split(r"\n\s*\n", text) if len(p.split()) >= 40]
+    paragraphs = sections(text)
     per_para = []
     for i, p in enumerate(paragraphs, 1):
         s = score_text(p, *models)

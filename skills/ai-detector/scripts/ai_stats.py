@@ -21,15 +21,15 @@ PATTERNS = {
             r"büyük önem taşı", r"kritik (?:bir )?(?:öneme|rol)", r"önemli bir rol oyna",
             r"vazgeçilmez bir", r"ayrılmaz bir parçası",
         ],
+        # Everyday connectors ("ayrıca", "dolayısıyla", "öte yandan") are left out on purpose:
+        # human Turkish uses them constantly, so they caused false positives in testing.
         "kalip_baglac": [
-            r"bunun yanı sıra", r"ayrıca", r"öte yandan", r"buna ek olarak",
-            r"bu bağlamda", r"bu doğrultuda", r"bu noktada", r"sonuç olarak",
-            r"özetle", r"kısacası", r"genel olarak", r"dolayısıyla",
+            r"bunun yanı sıra", r"buna ek olarak", r"bu bağlamda", r"bu doğrultuda",
+            r"sonuç olarak", r"özetle", r"genel olarak değerlendir",
         ],
         "abarti_sifat": [
-            r"kapsamlı", r"etkili", r"verimli", r"yenilikçi", r"dinamik",
-            r"çok yönlü", r"benzersiz", r"güçlü", r"sağlam", r"sorunsuz",
-            r"değerli", r"derinlemesine",
+            r"kapsamlı", r"verimli ve etkili", r"etkili ve verimli", r"yenilikçi", r"dinamik",
+            r"çok yönlü", r"benzersiz", r"eşsiz", r"sorunsuz", r"derinlemesine",
         ],
         "kacamak": [
             r"önemli(?:dir)? olduğunu belirtmek", r"unutulmamalıdır ki",
@@ -90,8 +90,17 @@ def detect_lang(text):
     return "tr" if tr > en else "en"
 
 
+def prose(text):
+    """Drop headings, table cells and labels: short lines without sentence-ending punctuation.
+    Without this, documents with tables look 'bursty' (very human) because every cell counts
+    as a two-word sentence."""
+    keep = [l for l in text.splitlines()
+            if len(re.findall(r"\w+", l)) >= 8 or re.search(r"[.!?…]\s*$", l)]
+    return "\n".join(keep)
+
+
 def sentences(text):
-    parts = re.split(r"(?<=[.!?…])\s+|\n+", text)
+    parts = re.split(r"(?<=[.!?…])\s+|\n+", prose(text))
     return [p.strip() for p in parts if len(re.findall(r"\w+", p)) >= 2]
 
 
@@ -114,6 +123,12 @@ def sentence_stats(sents, lang):
                 "std_len": None, "burstiness_cv": None}
     mean = statistics.mean(lengths)
     std = statistics.pstdev(lengths)
+    if mean > 35:
+        # Few or no full stops (chat messages, notes): "sentences" are really run-on blocks,
+        # so their length variation says nothing about style. Tested on an unpunctuated human
+        # message that otherwise scored as more uniform than AI text.
+        return {"sentences": len(lengths), "mean_len": round(mean, 1), "std_len": round(std, 1),
+                "burstiness_cv": None, "punctuation_sparse": True}
     return {"sentences": len(lengths), "mean_len": round(mean, 1), "std_len": round(std, 1),
             # Coefficient of variation: humans usually mix short and long sentences (higher CV).
             "burstiness_cv": round(std / mean, 3) if mean else None}
@@ -167,8 +182,10 @@ def analyze(text, lang):
     hits = pattern_hits(text, lang)
     n = max(len(words), 1)
     rates = {k: round(1000 * len(v) / n, 1) for k, v in hits.items()}
+    lines = [l for l in text.splitlines() if l.strip()]
     return {
         "words": len(words),
+        "non_prose_lines": len(lines) - len([l for l in prose(text).splitlines() if l.strip()]),
         **sentence_stats(sents, lang),
         "mattr": mattr(words),
         "pattern_rate_per_1000w": rates,

@@ -29,8 +29,9 @@ python "<skill>/scripts/ai_stats.py" doc.txt
 Returns JSON with: sentence-length burstiness (coefficient of variation), MATTR vocabulary diversity, AI-typical phrase rates per 1000 words (Turkish and English lists: stock openers, connector overuse, inflated adjectives, hedges, assistant leftovers), structure (bullets, headings, bold, em dashes, "X, Y and Z" triads), repeated trigrams, sentence-opener repetition, and the same core metrics per paragraph.
 
 Turn them into a **stats score S (0–100, higher = more AI-like)**, starting at 50:
-- burstiness_cv < 0.30: +15; 0.30–0.45: +5; > 0.60: −15
-- total pattern rate (sum of categories, per 1000 words) > 15: +15; 8–15: +7; < 3: −10
+- burstiness_cv < 0.30: +15; 0.30–0.45: +5; > 0.60: −15. If `punctuation_sparse` is true (chat messages, notes without full stops), burstiness is unavailable: skip this rule; missing punctuation itself leans human (−5).
+- total pattern rate (sum of categories, per 1000 words) > 15: +15; 5–15: +7; < 3: −10
+- `non_prose_lines` (headings, table cells) are already excluded from the sentence statistics; if they make up most of the text, rely less on S.
 - top_opener_share > 0.25 or repeated trigrams ≥ 3: +5
 - triads ≥ 3 per 300 words, or bold/headings in prose that wasn't meant as a document: +5
 - typos, slang, inconsistent formatting, very uneven paragraphs: −10
@@ -54,8 +55,10 @@ Find the Python environment: `$AIDET_PYTHON` if set, otherwise the venv created 
 
 Turn it into a **model score M (0–100)**:
 - If `position_0ai_1human` exists (human anchor available): M = 100 × (1 − position). Weight: normal.
-- Else, with only the AI anchor: r = document / ai_anchor. r ≤ 1.00 → 90; 1.05 → 75; 1.10 → 60; 1.20 → 30; ≥ 1.27 → 10 (interpolate). Weight: reduced, because it's uncalibrated.
-- Lower Binoculars = more machine-like. Paragraph scores show where the text changes character (mixed authorship).
+- Else, with only the AI anchor: r = document / ai_anchor. r ≤ 0.98 → 90; 1.00 → 75; 1.03 → 50; 1.07 → 25; ≥ 1.12 → 10 (interpolate). Weight: reduced, because it's uncalibrated. These cut-offs come from a small Turkish pilot (AI texts r = 0.93–0.98, human texts r = 1.07–1.18; Qwen2.5-0.5B pair); they are a starting point, not a validated threshold.
+- Lower Binoculars = more machine-like. Paragraph scores show where the text changes character (mixed authorship); documents made of short paragraphs are scored in merged ~120-word sections.
+- **Second opinion: `fast_detectgpt`** (Fast-DetectGPT analytic score, same models; higher = more machine-like). Read it as AI-side if ≥ 2.0, human-side if ≤ 1.0, otherwise neutral. If it agrees with M's side, keep M's weight; if it points the other way, halve M's weight and lower confidence one level. Don't average the two: in the Turkish pilot, Fast-DetectGPT flagged an encyclopedic human article (2.86) while Binoculars placed it correctly.
+- **Known blind spot (pilot):** short technical AI texts full of tool names scored human-like on both methods, and AI text paraphrased into a casual style scored clearly human on both. A human-looking model score never clears a text by itself.
 
 ## Step 3: Smoking guns (definitive signals)
 
@@ -115,6 +118,7 @@ Renormalize if a component is missing. Smoking gun overrides to ≥ 95.
 - High: ≥ 300 words, components within 20 points of each other, or a smoking gun.
 - Medium: one of the low-confidence conditions below.
 - Low: < 150 words; components disagree by > 35 points; known non-native writer, translation or grammar-tool editing; heavily templated genre (CV, legal, forms); text is a mix of quotes.
+- Always state in the report: casual, specific-sounding text can still be AI that was paraphrased or prompted to sound human; this skill catches that poorly.
 
 **Verdict bands:** 0–20 likely human · 20–40 probably human · 40–60 undecided · 60–80 probably AI · 80–100 likely AI. Mixed paragraphs → say "likely mixed authorship" and point to them.
 
